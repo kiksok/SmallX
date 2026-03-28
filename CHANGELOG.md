@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.3.2
+
+- Fix active device counting to use real live sessions instead of the looser TTL tracker
+- Ensure rejected over-limit devices are not counted as online
+- Add regression coverage to verify only admitted devices are reported online
+
 ## v0.3.1
 
 - Fix device limit enforcement so excess TCP devices are disconnected immediately

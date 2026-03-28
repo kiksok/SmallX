@@ -152,6 +152,17 @@ func TestDeviceLimitRejectsExtraTCPDevice(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected second device to be disconnected")
 	}
+
+	snapshot, err := service.Snapshot(nil)
+	if err != nil {
+		t.Fatalf("Snapshot returned error: %v", err)
+	}
+	if len(snapshot.AliveIPs) != 1 {
+		t.Fatalf("expected exactly one active user alive record, got %d", len(snapshot.AliveIPs))
+	}
+	if len(snapshot.AliveIPs[0].IPs) != 1 || snapshot.AliveIPs[0].IPs[0] != "127.0.0.2" {
+		t.Fatalf("expected only first device to be counted online, got %+v", snapshot.AliveIPs[0].IPs)
+	}
 }
 
 func TestDeviceLimitRejectsExtraUDPDevice(t *testing.T) {
