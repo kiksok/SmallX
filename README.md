@@ -2,7 +2,7 @@
 
 `smallX` is a lightweight Xboard-compatible backend project with a small control plane and an install flow aimed at simple self-hosting.
 
-Current version: `v0.1.0`
+Current version: `v0.2.0`
 
 The goal is not to embed a full protocol core like XrayR does. Instead, this project keeps the control layer small and focuses on:
 
@@ -38,7 +38,26 @@ This first scaffold includes:
   - Shadowsocks 2022 user-key derivation
   - `simple-obfs-http` style plugin parsing
 
-This means the control plane already compiles and can talk to Xboard, but it does not yet start a real proxy core.
+This means the control plane already compiles and can talk to Xboard.
+
+## Current Verified Scope
+
+The currently verified runtime path is:
+
+- Linux AMD64
+- `ss-native`
+- `Shadowsocks aes-256-gcm`
+- TCP forwarding
+- UDP forwarding
+- Xboard `UniProxy` control-plane pull/push
+
+The following items are still planned rather than fully verified in production:
+
+- `aes-128-gcm`
+- `aes-192-gcm`
+- `chacha20-ietf-poly1305`
+- `simple_obfs_http`
+- Shadowsocks 2022
 
 ## Next steps
 
@@ -81,7 +100,7 @@ To install a tagged version:
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/kiksok/liteone/main/scripts/install.sh) \
-  --ref v0.1.0 \
+  --ref v0.2.0 \
   --panel-url https://your-panel.example.com \
   --token your-xboard-server-token \
   --node-id 1 \
