@@ -8,16 +8,27 @@ import (
 	"os/signal"
 	"syscall"
 
-	"liteone/internal/agent"
-	"liteone/internal/backend"
-	"liteone/internal/config"
-	"liteone/internal/provider"
-	"liteone/internal/provider/xboard"
+	"smallx/internal/agent"
+	"smallx/internal/backend"
+	"smallx/internal/buildinfo"
+	"smallx/internal/config"
+	"smallx/internal/provider"
+	"smallx/internal/provider/xboard"
 )
 
 func main() {
 	configPath := flag.String("config", "./config.example.yaml", "path to config file")
+	printVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+
+	if *printVersion {
+		if buildinfo.Commit != "" {
+			println(buildinfo.Version + " (" + buildinfo.Commit + ")")
+			return
+		}
+		println(buildinfo.Version)
+		return
+	}
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -25,7 +36,9 @@ func main() {
 	}
 
 	logger := newLogger(cfg.Log.Level)
-	logger.Info("starting liteone",
+	logger.Info("starting smallx",
+		slog.String("version", buildinfo.Version),
+		slog.String("commit", buildinfo.Commit),
 		slog.String("provider", cfg.Panel.Provider),
 		slog.String("runtime", cfg.Runtime.Adapter),
 		slog.Int("node_id", cfg.Panel.NodeID),
@@ -69,6 +82,8 @@ func buildRuntime(cfg *config.Config, logger *slog.Logger) (backend.Runtime, err
 	switch cfg.Runtime.Adapter {
 	case "dry-run":
 		return backend.NewDryRun(logger)
+	case "ss-native":
+		return backend.NewSSNative(logger)
 	case "ss-prototype":
 		return backend.NewSSPrototype(logger)
 	default:

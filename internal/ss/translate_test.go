@@ -3,7 +3,7 @@ package ss
 import (
 	"testing"
 
-	"liteone/internal/model"
+	"smallx/internal/model"
 )
 
 func TestTranslateAEADNode(t *testing.T) {

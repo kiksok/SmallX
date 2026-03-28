@@ -3,7 +3,7 @@ package backend
 import (
 	"context"
 
-	"liteone/internal/model"
+	"smallx/internal/model"
 )
 
 type Runtime interface {

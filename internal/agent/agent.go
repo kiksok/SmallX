@@ -6,10 +6,10 @@ import (
 	"log/slog"
 	"time"
 
-	"liteone/internal/backend"
-	"liteone/internal/config"
-	"liteone/internal/model"
-	"liteone/internal/provider"
+	"smallx/internal/backend"
+	"smallx/internal/config"
+	"smallx/internal/model"
+	"smallx/internal/provider"
 )
 
 type Agent struct {

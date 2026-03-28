@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"liteone/internal/model"
+	"smallx/internal/model"
 )
 
 type RuntimeConfig struct {

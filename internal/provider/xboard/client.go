@@ -12,8 +12,8 @@ import (
 	"strings"
 	"sync"
 
-	"liteone/internal/config"
-	"liteone/internal/model"
+	"smallx/internal/config"
+	"smallx/internal/model"
 )
 
 type Client struct {

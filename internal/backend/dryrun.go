@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"liteone/internal/model"
+	"smallx/internal/model"
 )
 
 type DryRun struct {

@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"liteone/internal/model"
-	"liteone/internal/ss"
+	"smallx/internal/model"
+	"smallx/internal/ss"
 )
 
 type SSPrototype struct {

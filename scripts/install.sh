@@ -2,20 +2,21 @@
 set -euo pipefail
 
 REPO_URL="https://github.com/kiksok/liteone.git"
-INSTALL_DIR="/opt/liteone"
-CONFIG_DIR="/etc/liteone"
+INSTALL_DIR="/opt/smallx"
+CONFIG_DIR="/etc/smallx"
 CONFIG_FILE="${CONFIG_DIR}/config.yaml"
-BINARY_PATH="/usr/local/bin/liteone"
-SERVICE_FILE="/etc/systemd/system/liteone.service"
+BINARY_PATH="/usr/local/bin/smallx"
+SERVICE_FILE="/etc/systemd/system/smallx.service"
 GO_VERSION="1.22.12"
 GO_TARBALL="go${GO_VERSION}.linux-amd64.tar.gz"
 GO_URL="https://go.dev/dl/${GO_TARBALL}"
+REPO_REF="main"
 
 PANEL_URL=""
 TOKEN=""
 NODE_ID=""
 NODE_TYPE="shadowsocks"
-RUNTIME="ss-prototype"
+RUNTIME="ss-native"
 PULL_INTERVAL="60s"
 STATUS_INTERVAL="60s"
 
@@ -34,6 +35,7 @@ Optional:
   --runtime NAME           Runtime adapter, default: ss-prototype
   --pull-interval DUR      Pull interval, default: 60s
   --status-interval DUR    Status interval, default: 60s
+  --ref REF                Git ref to install, default: main
 EOF
 }
 
@@ -65,6 +67,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --status-interval)
       STATUS_INTERVAL="$2"
+      shift 2
+      ;;
+    --ref)
+      REPO_REF="$2"
       shift 2
       ;;
     -h|--help)
@@ -127,7 +133,13 @@ if [[ ! -d "${INSTALL_DIR}/.git" ]]; then
   git clone "$REPO_URL" "$INSTALL_DIR"
 else
   git -C "$INSTALL_DIR" fetch --all --tags
-  git -C "$INSTALL_DIR" reset --hard origin/main
+fi
+
+git -C "$INSTALL_DIR" fetch --all --tags
+if git -C "$INSTALL_DIR" rev-parse "origin/${REPO_REF}" >/dev/null 2>&1; then
+  git -C "$INSTALL_DIR" checkout -B "$REPO_REF" "origin/${REPO_REF}"
+else
+  git -C "$INSTALL_DIR" checkout -f "$REPO_REF"
 fi
 
 mkdir -p "$CONFIG_DIR"
@@ -146,20 +158,24 @@ sync:
 
 runtime:
   adapter: ${RUNTIME}
-  work_dir: /var/lib/liteone
+  work_dir: /var/lib/smallx
   apply_timeout: 15s
 
 log:
   level: info
 EOF
 
-mkdir -p /var/lib/liteone
+mkdir -p /var/lib/smallx
 cd "$INSTALL_DIR"
-GOPROXY="${GOPROXY:-https://goproxy.cn,direct}" go build -o "$BINARY_PATH" ./cmd/liteone
+VERSION_VALUE="$(git describe --tags --always 2>/dev/null || echo dev)"
+COMMIT_VALUE="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+GOPROXY="${GOPROXY:-https://goproxy.cn,direct}" go build \
+  -ldflags "-X 'smallx/internal/buildinfo.Version=${VERSION_VALUE}' -X 'smallx/internal/buildinfo.Commit=${COMMIT_VALUE}'" \
+  -o "$BINARY_PATH" ./cmd/smallx
 
 cat > "$SERVICE_FILE" <<EOF
 [Unit]
-Description=liteone
+Description=smallx
 After=network-online.target
 Wants=network-online.target
 
@@ -168,7 +184,7 @@ Type=simple
 ExecStart=${BINARY_PATH} -config ${CONFIG_FILE}
 Restart=always
 RestartSec=3
-WorkingDirectory=/var/lib/liteone
+WorkingDirectory=/var/lib/smallx
 LimitNOFILE=1048576
 
 [Install]
@@ -176,19 +192,19 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable --now liteone
-systemctl --no-pager --full status liteone || true
+systemctl enable --now smallx
+systemctl --no-pager --full status smallx || true
 
 cat <<EOF
 
-liteone has been installed.
+smallX has been installed.
 
 Config:   ${CONFIG_FILE}
 Binary:   ${BINARY_PATH}
-Service:  liteone.service
+Service:  smallx.service
 
 Useful commands:
-  journalctl -u liteone -f
-  systemctl restart liteone
-  systemctl status liteone
+  journalctl -u smallx -f
+  systemctl restart smallx
+  systemctl status smallx
 EOF

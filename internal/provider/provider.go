@@ -3,7 +3,7 @@ package provider
 import (
 	"context"
 
-	"liteone/internal/model"
+	"smallx/internal/model"
 )
 
 type Provider interface {

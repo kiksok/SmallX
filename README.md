@@ -1,6 +1,8 @@
-# liteone
+# smallX
 
-`liteone` is a lightweight Xboard-compatible backend project with a small control plane and an install flow aimed at simple self-hosting.
+`smallX` is a lightweight Xboard-compatible backend project with a small control plane and an install flow aimed at simple self-hosting.
+
+Current version: `v0.1.0`
 
 The goal is not to embed a full protocol core like XrayR does. Instead, this project keeps the control layer small and focuses on:
 
@@ -50,7 +52,13 @@ The intended next phase is:
 ## Run
 
 ```bash
-go run ./cmd/liteone -config ./config.example.yaml
+go run ./cmd/smallx -config ./config.example.yaml
+```
+
+Print version:
+
+```bash
+go run ./cmd/smallx -version
 ```
 
 ## Config
@@ -69,10 +77,21 @@ bash <(curl -fsSL https://raw.githubusercontent.com/kiksok/liteone/main/scripts/
   --node-type shadowsocks
 ```
 
+To install a tagged version:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/kiksok/liteone/main/scripts/install.sh) \
+  --ref v0.1.0 \
+  --panel-url https://your-panel.example.com \
+  --token your-xboard-server-token \
+  --node-id 1 \
+  --node-type shadowsocks
+```
+
 The installer will:
 
 - install or upgrade Go if needed
-- clone or update `liteone` into `/opt/liteone`
-- build `/usr/local/bin/liteone`
-- write `/etc/liteone/config.yaml`
-- install and start `liteone.service`
+- clone or update `smallX` into `/opt/smallx`
+- build `/usr/local/bin/smallx`
+- write `/etc/smallx/config.yaml`
+- install and start `smallx.service`
