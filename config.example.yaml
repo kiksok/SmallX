@@ -1,0 +1,19 @@
+panel:
+  provider: xboard
+  base_url: "https://panel.example.com"
+  token: "replace-with-xboard-server-token"
+  node_id: 1
+  node_type: shadowsocks
+  timeout: 10s
+
+sync:
+  pull_interval: 60s
+  status_interval: 60s
+
+runtime:
+  adapter: ss-prototype
+  work_dir: ./run
+  apply_timeout: 15s
+
+log:
+  level: info

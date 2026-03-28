@@ -1,0 +1,6 @@
+/bin/
+/dist/
+/build/
+/run/
+*.exe
+*.log
