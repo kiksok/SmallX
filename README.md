@@ -2,7 +2,7 @@
 
 `smallX` is a lightweight Xboard-compatible backend project with a small control plane and an install flow aimed at simple self-hosting.
 
-Current version: `v0.2.0`
+Current version: `v0.3.0`
 
 The goal is not to embed a full protocol core like XrayR does. Instead, this project keeps the control layer small and focuses on:
 
@@ -49,7 +49,12 @@ The currently verified runtime path is:
 - `Shadowsocks aes-256-gcm`
 - TCP forwarding
 - UDP forwarding
+- UDP FullCone-style mapping behavior
 - Xboard `UniProxy` control-plane pull/push
+- Per-user TCP connection limits
+- Single-machine IP/device limit enforcement
+- Local allow/block target rules
+- Remote Xboard block route enforcement
 
 The following items are still planned rather than fully verified in production:
 
@@ -105,6 +110,21 @@ bash <(curl -fsSL https://raw.githubusercontent.com/kiksok/SmallX/main/scripts/i
   --token your-xboard-server-token \
   --node-id 1 \
   --node-type shadowsocks
+```
+
+Useful policy flags:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/kiksok/SmallX/main/scripts/install.sh) \
+  --ref v0.3.0 \
+  --panel-url https://your-panel.example.com \
+  --token your-xboard-server-token \
+  --node-id 1 \
+  --node-type shadowsocks \
+  --default-tcp-conn-limit 8 \
+  --enforce-device-limit true \
+  --allow-targets "example.com,api.example.com" \
+  --block-targets "ads.example.com"
 ```
 
 The installer will:

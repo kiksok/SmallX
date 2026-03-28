@@ -56,6 +56,56 @@ func TestServiceTCPAndUDP(t *testing.T) {
 	}
 }
 
+func TestUDPFullConeMapping(t *testing.T) {
+	target1, close1 := startUDPSourceReporter(t)
+	defer close1()
+	target2, close2 := startUDPSourceReporter(t)
+	defer close2()
+
+	port := pickFreePort(t)
+	service := NewService(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer func() { _ = service.Close() }()
+
+	cfg := RuntimeConfig{
+		Server: ServerConfig{
+			ListenIP:   "127.0.0.1",
+			ServerPort: port,
+			Cipher:     "aes-256-gcm",
+			EnableTCP:  false,
+			EnableUDP:  true,
+		},
+		Users: []UserConfig{
+			{ID: 1, UUID: "user-1", Method: "aes-256-gcm", Password: "f07a0130-b901-442f-82ca-4bb51113f193"},
+		},
+	}
+
+	if err := service.Apply(cfg); err != nil {
+		t.Fatalf("Apply returned error: %v", err)
+	}
+
+	def, _ := LookupCipher("aes-256-gcm")
+	masterKey := DeriveMasterKey(def, cfg.Users[0].Password)
+
+	clientConn, err := net.ListenUDP("udp", nil)
+	if err != nil {
+		t.Fatalf("ListenUDP returned error: %v", err)
+	}
+	defer clientConn.Close()
+
+	source1, err := udpReporterRoundTrip(clientConn, port, def, masterKey, target1, "probe-1")
+	if err != nil {
+		t.Fatalf("first udp reporter round trip failed: %v", err)
+	}
+	source2, err := udpReporterRoundTrip(clientConn, port, def, masterKey, target2, "probe-2")
+	if err != nil {
+		t.Fatalf("second udp reporter round trip failed: %v", err)
+	}
+
+	if source1 != source2 {
+		t.Fatalf("expected fullcone-style source reuse, got %s and %s", source1, source2)
+	}
+}
+
 func testTCPRoundTrip(port int, def CipherDef, masterKey []byte, target string) error {
 	conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", itoa(port)), 3*time.Second)
 	if err != nil {
@@ -129,6 +179,39 @@ func testUDPRoundTrip(port int, def CipherDef, masterKey []byte, target string) 
 	return nil
 }
 
+func udpReporterRoundTrip(conn *net.UDPConn, port int, def CipherDef, masterKey []byte, target string, payload string) (string, error) {
+	serverAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:"+itoa(port))
+	if err != nil {
+		return "", err
+	}
+	targetAddr, err := EncodeAddr(target)
+	if err != nil {
+		return "", err
+	}
+	packet, err := encryptUDPPacket(def, masterKey, append(targetAddr, []byte(payload)...))
+	if err != nil {
+		return "", err
+	}
+	if _, err := conn.WriteToUDP(packet, serverAddr); err != nil {
+		return "", err
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	buf := make([]byte, 64*1024)
+	n, _, err := conn.ReadFromUDP(buf)
+	if err != nil {
+		return "", err
+	}
+	plaintext, err := decryptUDPPacketForUser(def, masterKey, buf[:n])
+	if err != nil {
+		return "", err
+	}
+	_, headerLen, err := SplitAddr(plaintext)
+	if err != nil {
+		return "", err
+	}
+	return string(plaintext[headerLen:]), nil
+}
+
 func startTCPEchoServer(t *testing.T) (string, func()) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -164,6 +247,25 @@ func startUDPEchoServer(t *testing.T) (string, func()) {
 				return
 			}
 			_, _ = conn.WriteTo(buf[:n], addr)
+		}
+	}()
+	return conn.LocalAddr().String(), func() { _ = conn.Close() }
+}
+
+func startUDPSourceReporter(t *testing.T) (string, func()) {
+	t.Helper()
+	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		buf := make([]byte, 64*1024)
+		for {
+			_, addr, err := conn.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			_, _ = conn.WriteTo([]byte(addr.String()), addr)
 		}
 	}()
 	return conn.LocalAddr().String(), func() { _ = conn.Close() }

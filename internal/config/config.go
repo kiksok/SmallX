@@ -32,9 +32,13 @@ type SyncConfig struct {
 }
 
 type RuntimeConfig struct {
-	Adapter      string `yaml:"adapter"`
-	WorkDir      string `yaml:"work_dir"`
-	ApplyTimeout string `yaml:"apply_timeout"`
+	Adapter             string   `yaml:"adapter"`
+	WorkDir             string   `yaml:"work_dir"`
+	ApplyTimeout        string   `yaml:"apply_timeout"`
+	DefaultTCPConnLimit int      `yaml:"default_tcp_conn_limit"`
+	EnforceDeviceLimit  *bool    `yaml:"enforce_device_limit"`
+	AllowTargets        []string `yaml:"allow_targets"`
+	BlockTargets        []string `yaml:"block_targets"`
 }
 
 type LogConfig struct {
@@ -72,6 +76,10 @@ func applyDefaults(cfg *Config) {
 	cfg.Runtime.Adapter = strings.TrimSpace(strings.ToLower(cfg.Runtime.Adapter))
 	cfg.Runtime.WorkDir = defaultIfEmpty(cfg.Runtime.WorkDir, "./run")
 	cfg.Runtime.ApplyTimeout = defaultIfEmpty(cfg.Runtime.ApplyTimeout, "15s")
+	if cfg.Runtime.EnforceDeviceLimit == nil {
+		value := true
+		cfg.Runtime.EnforceDeviceLimit = &value
+	}
 
 	cfg.Log.Level = strings.TrimSpace(strings.ToLower(defaultIfEmpty(cfg.Log.Level, "info")))
 }
@@ -127,6 +135,10 @@ func (c SyncConfig) StatusEvery() time.Duration {
 func (c RuntimeConfig) ApplyTimeoutDuration() time.Duration {
 	d, _ := time.ParseDuration(c.ApplyTimeout)
 	return d
+}
+
+func (c RuntimeConfig) DeviceLimitEnabled() bool {
+	return c.EnforceDeviceLimit != nil && *c.EnforceDeviceLimit
 }
 
 func defaultIfEmpty(value, fallback string) string {

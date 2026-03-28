@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 
+	"smallx/internal/config"
 	"smallx/internal/model"
 	"smallx/internal/ss"
 )
@@ -11,12 +12,14 @@ import (
 type SSNative struct {
 	logger  *slog.Logger
 	service *ss.Service
+	runtime config.RuntimeConfig
 }
 
-func NewSSNative(logger *slog.Logger) (*SSNative, error) {
+func NewSSNative(runtime config.RuntimeConfig, logger *slog.Logger) (*SSNative, error) {
 	return &SSNative{
 		logger:  logger.With(slog.String("runtime", "ss-native")),
 		service: ss.NewService(logger),
+		runtime: runtime,
 	}, nil
 }
 
@@ -25,7 +28,12 @@ func (s *SSNative) Name() string {
 }
 
 func (s *SSNative) Apply(_ context.Context, plan model.RuntimePlan) error {
-	cfg, err := ss.Translate(plan.Node, plan.Users)
+	cfg, err := ss.Translate(plan.Node, plan.Users, ss.Options{
+		DefaultTCPConnLimit: s.runtime.DefaultTCPConnLimit,
+		EnforceDeviceLimit:  s.runtime.DeviceLimitEnabled(),
+		AllowTargets:        append([]string(nil), s.runtime.AllowTargets...),
+		BlockTargets:        append([]string(nil), s.runtime.BlockTargets...),
+	})
 	if err != nil {
 		return err
 	}

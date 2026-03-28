@@ -15,20 +15,28 @@ type RuntimeConfig struct {
 }
 
 type ServerConfig struct {
-	ListenIP   string
-	ServerPort int
-	Cipher     string
-	ServerKey  string
-	EnableTCP  bool
-	EnableUDP  bool
-	Obfs       ObfsConfig
+	ListenIP           string
+	ServerPort         int
+	Cipher             string
+	ServerKey          string
+	EnableTCP          bool
+	EnableUDP          bool
+	Obfs               ObfsConfig
+	DefaultTCPConnLimit int
+	EnforceDeviceLimit bool
+	AllowTargets       []string
+	BlockTargets       []string
+	Routes             []model.RouteRule
 }
 
 type UserConfig struct {
-	ID       int
-	UUID     string
-	Method   string
-	Password string
+	ID           int
+	UUID         string
+	Method       string
+	Password     string
+	SpeedLimit   int
+	DeviceLimit  int
+	TCPConnLimit int
 }
 
 type ObfsConfig struct {
@@ -44,6 +52,13 @@ type CipherSpec struct {
 	UserKeySize int
 }
 
+type Options struct {
+	DefaultTCPConnLimit int
+	EnforceDeviceLimit  bool
+	AllowTargets        []string
+	BlockTargets        []string
+}
+
 var supportedCiphers = map[string]CipherSpec{
 	"chacha20-ietf-poly1305":   {Name: "chacha20-ietf-poly1305"},
 	"aes-128-gcm":              {Name: "aes-128-gcm"},
@@ -53,7 +68,7 @@ var supportedCiphers = map[string]CipherSpec{
 	"2022-blake3-aes-256-gcm":  {Name: "2022-blake3-aes-256-gcm", Is2022: true, UserKeySize: 32},
 }
 
-func Translate(node model.NodeConfig, users []model.UserInfo) (RuntimeConfig, error) {
+func Translate(node model.NodeConfig, users []model.UserInfo, options Options) (RuntimeConfig, error) {
 	if strings.ToLower(node.Protocol) != "shadowsocks" {
 		return RuntimeConfig{}, fmt.Errorf("unsupported protocol for ss runtime: %s", node.Protocol)
 	}
@@ -77,13 +92,18 @@ func Translate(node model.NodeConfig, users []model.UserInfo) (RuntimeConfig, er
 
 	cfg := RuntimeConfig{
 		Server: ServerConfig{
-			ListenIP:   defaultListenIP(node.ListenIP),
-			ServerPort: node.ServerPort,
-			Cipher:     spec.Name,
-			ServerKey:  node.ServerKey,
-			EnableTCP:  true,
-			EnableUDP:  true,
-			Obfs:       obfs,
+			ListenIP:            defaultListenIP(node.ListenIP),
+			ServerPort:          node.ServerPort,
+			Cipher:              spec.Name,
+			ServerKey:           node.ServerKey,
+			EnableTCP:           true,
+			EnableUDP:           true,
+			Obfs:                obfs,
+			DefaultTCPConnLimit: options.DefaultTCPConnLimit,
+			EnforceDeviceLimit:  options.EnforceDeviceLimit,
+			AllowTargets:        append([]string(nil), options.AllowTargets...),
+			BlockTargets:        append([]string(nil), options.BlockTargets...),
+			Routes:              append([]model.RouteRule(nil), node.Routes...),
 		},
 		Users: make([]UserConfig, 0, len(users)),
 	}
@@ -94,10 +114,13 @@ func Translate(node model.NodeConfig, users []model.UserInfo) (RuntimeConfig, er
 			return RuntimeConfig{}, fmt.Errorf("derive password for user %d: %w", user.ID, err)
 		}
 		cfg.Users = append(cfg.Users, UserConfig{
-			ID:       user.ID,
-			UUID:     user.UUID,
-			Method:   spec.Name,
-			Password: pass,
+			ID:           user.ID,
+			UUID:         user.UUID,
+			Method:       spec.Name,
+			Password:     pass,
+			SpeedLimit:   user.SpeedLimit,
+			DeviceLimit:  user.DeviceLimit,
+			TCPConnLimit: options.DefaultTCPConnLimit,
 		})
 	}
 

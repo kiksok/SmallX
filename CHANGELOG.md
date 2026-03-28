@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.3.0
+
+- Add UDP FullCone-style mapping test coverage
+- Add per-user TCP connection limit support
+- Add single-machine IP/device limit enforcement based on Xboard `device_limit`
+- Add local allow/block target rules
+- Add remote Xboard block route enforcement
+- Add installer flags for connection limit and target allow/block policies
+- Verify the updated `ss-native` path on the live Linux AMD64 test server
+
 ## v0.2.0
 
 - Verify `smallX` on a real Linux AMD64 test server

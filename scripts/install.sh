@@ -19,6 +19,10 @@ NODE_TYPE="shadowsocks"
 RUNTIME="ss-native"
 PULL_INTERVAL="60s"
 STATUS_INTERVAL="60s"
+DEFAULT_TCP_CONN_LIMIT="0"
+ENFORCE_DEVICE_LIMIT="true"
+ALLOW_TARGETS=""
+BLOCK_TARGETS=""
 
 usage() {
   cat <<EOF
@@ -32,11 +36,31 @@ Required:
 
 Optional:
   --node-type TYPE         Node type, default: shadowsocks
-  --runtime NAME           Runtime adapter, default: ss-prototype
+  --runtime NAME           Runtime adapter, default: ss-native
   --pull-interval DUR      Pull interval, default: 60s
   --status-interval DUR    Status interval, default: 60s
+  --default-tcp-conn-limit N
+                           Per-user TCP connection limit, default: 0
+  --enforce-device-limit true|false
+                           Enforce Xboard device_limit as single-machine IP/device limit
+  --allow-targets CSV      Optional allowlist, comma-separated
+  --block-targets CSV      Optional blocklist, comma-separated
   --ref REF                Git ref to install, default: main
 EOF
+}
+
+yaml_list() {
+  local indent="$1"
+  local csv="$2"
+  if [[ -z "$csv" ]]; then
+    echo "${indent}[]"
+    return
+  fi
+  IFS=',' read -r -a items <<< "$csv"
+  for item in "${items[@]}"; do
+    item="$(echo "$item" | xargs)"
+    [[ -n "$item" ]] && printf '%s- "%s"\n' "$indent" "$item"
+  done
 }
 
 while [[ $# -gt 0 ]]; do
@@ -67,6 +91,22 @@ while [[ $# -gt 0 ]]; do
       ;;
     --status-interval)
       STATUS_INTERVAL="$2"
+      shift 2
+      ;;
+    --default-tcp-conn-limit)
+      DEFAULT_TCP_CONN_LIMIT="$2"
+      shift 2
+      ;;
+    --enforce-device-limit)
+      ENFORCE_DEVICE_LIMIT="$2"
+      shift 2
+      ;;
+    --allow-targets)
+      ALLOW_TARGETS="$2"
+      shift 2
+      ;;
+    --block-targets)
+      BLOCK_TARGETS="$2"
       shift 2
       ;;
     --ref)
@@ -143,6 +183,8 @@ else
 fi
 
 mkdir -p "$CONFIG_DIR"
+ALLOW_TARGETS_YAML="$(yaml_list '    ' "$ALLOW_TARGETS")"
+BLOCK_TARGETS_YAML="$(yaml_list '    ' "$BLOCK_TARGETS")"
 cat > "$CONFIG_FILE" <<EOF
 panel:
   provider: xboard
@@ -160,6 +202,12 @@ runtime:
   adapter: ${RUNTIME}
   work_dir: /var/lib/smallx
   apply_timeout: 15s
+  default_tcp_conn_limit: ${DEFAULT_TCP_CONN_LIMIT}
+  enforce_device_limit: ${ENFORCE_DEVICE_LIMIT}
+  allow_targets:
+${ALLOW_TARGETS_YAML}
+  block_targets:
+${BLOCK_TARGETS_YAML}
 
 log:
   level: info

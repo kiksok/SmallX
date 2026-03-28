@@ -14,6 +14,10 @@ runtime:
   adapter: ss-native
   work_dir: ./run
   apply_timeout: 15s
+  default_tcp_conn_limit: 0
+  enforce_device_limit: true
+  allow_targets: []
+  block_targets: []
 
 log:
   level: info

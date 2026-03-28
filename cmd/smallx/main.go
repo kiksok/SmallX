@@ -83,7 +83,7 @@ func buildRuntime(cfg *config.Config, logger *slog.Logger) (backend.Runtime, err
 	case "dry-run":
 		return backend.NewDryRun(logger)
 	case "ss-native":
-		return backend.NewSSNative(logger)
+		return backend.NewSSNative(cfg.Runtime, logger)
 	case "ss-prototype":
 		return backend.NewSSPrototype(logger)
 	default:

@@ -29,6 +29,7 @@ type Service struct {
 
 	traffic *trafficStore
 	online  *onlineTracker
+	limits  *sessionLimiter
 
 	udpMu       sync.Mutex
 	udpSessions map[string]*udpSession
@@ -38,6 +39,7 @@ type serviceState struct {
 	Config RuntimeConfig
 	Cipher CipherDef
 	Users  []*UserEntry
+	Rules  *targetRules
 }
 
 type UserEntry struct {
@@ -49,6 +51,7 @@ type udpSession struct {
 	user   *UserEntry
 	client netip.AddrPort
 	pc     net.PacketConn
+	done   func()
 }
 
 type trafficStore struct {
@@ -73,6 +76,7 @@ func NewService(logger *slog.Logger) *Service {
 		startedAt:   time.Now(),
 		traffic:     &trafficStore{data: make(map[int]*trafficValue)},
 		online:      &onlineTracker{ttl: 5 * time.Minute, data: make(map[int]map[string]time.Time)},
+		limits:      newSessionLimiter(),
 		udpSessions: make(map[string]*udpSession),
 	}
 }
@@ -168,10 +172,16 @@ func buildState(cfg RuntimeConfig) (*serviceState, error) {
 		})
 	}
 
+	rules, err := compileTargetRules(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	return &serviceState{
 		Config: cfg,
 		Cipher: def,
 		Users:  users,
+		Rules:  rules,
 	}, nil
 }
 
@@ -264,6 +274,18 @@ func (s *Service) handleTCP(conn net.Conn) {
 		return
 	}
 
+	if err := state.Rules.Validate(target); err != nil {
+		s.logger.Warn("tcp target rejected", slog.Any("error", err), slog.String("target", target))
+		return
+	}
+
+	release, err := s.limits.AcquireTCP(user.Config, RemoteIP(conn.RemoteAddr()), state.Config.Server.EnforceDeviceLimit)
+	if err != nil {
+		s.logger.Warn("tcp client rejected", slog.Any("error", err), slog.Int("user_id", user.Config.ID))
+		return
+	}
+	defer release()
+
 	s.online.seen(user.Config.ID, RemoteIP(conn.RemoteAddr()))
 
 	remote, err := net.DialTimeout("tcp", target, 10*time.Second)
@@ -347,6 +369,10 @@ func (s *Service) handleUDP(serverConn *net.UDPConn, clientAddr netip.AddrPort, 
 		s.logger.Debug("udp target parse failed", slog.Any("error", err))
 		return
 	}
+	if err := state.Rules.Validate(target); err != nil {
+		s.logger.Debug("udp target rejected", slog.Any("error", err), slog.String("target", target))
+		return
+	}
 	payload := plaintext[headerLen:]
 	if len(payload) == 0 {
 		return
@@ -354,7 +380,7 @@ func (s *Service) handleUDP(serverConn *net.UDPConn, clientAddr netip.AddrPort, 
 
 	s.online.seen(user.Config.ID, clientAddr.Addr().String())
 
-	session, err := s.getOrCreateUDPSession(serverConn, state.Cipher, user, clientAddr)
+	session, err := s.getOrCreateUDPSession(serverConn, state, user, clientAddr)
 	if err != nil {
 		s.logger.Warn("udp session create failed", slog.Any("error", err))
 		return
@@ -373,7 +399,7 @@ func (s *Service) handleUDP(serverConn *net.UDPConn, clientAddr netip.AddrPort, 
 	s.traffic.addUp(user.Config.ID, int64(len(payload)))
 }
 
-func (s *Service) getOrCreateUDPSession(serverConn *net.UDPConn, def CipherDef, user *UserEntry, clientAddr netip.AddrPort) (*udpSession, error) {
+func (s *Service) getOrCreateUDPSession(serverConn *net.UDPConn, state *serviceState, user *UserEntry, clientAddr netip.AddrPort) (*udpSession, error) {
 	key := fmt.Sprintf("%d|%s", user.Config.ID, clientAddr.String())
 
 	s.udpMu.Lock()
@@ -386,20 +412,29 @@ func (s *Service) getOrCreateUDPSession(serverConn *net.UDPConn, def CipherDef, 
 	if err != nil {
 		return nil, err
 	}
+	done, err := s.limits.AcquireUDP(user.Config, clientAddr.Addr().String(), state.Config.Server.EnforceDeviceLimit)
+	if err != nil {
+		_ = pc.Close()
+		return nil, err
+	}
 
 	session := &udpSession{
 		user:   user,
 		client: clientAddr,
 		pc:     pc,
+		done:   done,
 	}
 	s.udpSessions[key] = session
 
-	go s.serveUDPSession(key, serverConn, def, session)
+	go s.serveUDPSession(key, serverConn, state.Cipher, session)
 	return session, nil
 }
 
 func (s *Service) serveUDPSession(key string, serverConn *net.UDPConn, def CipherDef, session *udpSession) {
 	defer func() {
+		if session.done != nil {
+			session.done()
+		}
 		_ = session.pc.Close()
 		s.udpMu.Lock()
 		delete(s.udpSessions, key)

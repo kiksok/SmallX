@@ -14,7 +14,7 @@ func TestTranslateAEADNode(t *testing.T) {
 		Cipher:     "aes-256-gcm",
 	}, []model.UserInfo{
 		{ID: 1, UUID: "abc-uuid-1"},
-	})
+	}, Options{})
 	if err != nil {
 		t.Fatalf("Translate returned error: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestTranslate2022Node(t *testing.T) {
 		ServerKey:  "c2VydmVyLWtleS0xMjM0NQ==",
 	}, []model.UserInfo{
 		{ID: 1, UUID: "1234567890abcdef-hello-world"},
-	})
+	}, Options{})
 	if err != nil {
 		t.Fatalf("Translate returned error: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestParseObfsHTTP(t *testing.T) {
 		Cipher:     "aes-128-gcm",
 		Plugin:     "obfs",
 		PluginOpts: "obfs=http;obfs-host=cdn.example.com;path=/video",
-	}, nil)
+	}, nil, Options{})
 	if err != nil {
 		t.Fatalf("Translate returned error: %v", err)
 	}

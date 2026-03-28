@@ -30,7 +30,7 @@ func (s *SSPrototype) Name() string {
 }
 
 func (s *SSPrototype) Apply(_ context.Context, plan model.RuntimePlan) error {
-	cfg, err := ss.Translate(plan.Node, plan.Users)
+	cfg, err := ss.Translate(plan.Node, plan.Users, ss.Options{})
 	if err != nil {
 		return err
 	}
