@@ -89,7 +89,7 @@ See [config.example.yaml](./config.example.yaml).
 After this repository is pushed to GitHub, a server can be provisioned with:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/kiksok/liteone/main/scripts/install.sh) \
+bash <(curl -fsSL https://raw.githubusercontent.com/kiksok/SmallX/main/scripts/install.sh) \
   --panel-url https://your-panel.example.com \
   --token your-xboard-server-token \
   --node-id 1 \
@@ -99,7 +99,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/kiksok/liteone/main/scripts/
 To install a tagged version:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/kiksok/liteone/main/scripts/install.sh) \
+bash <(curl -fsSL https://raw.githubusercontent.com/kiksok/SmallX/main/scripts/install.sh) \
   --ref v0.2.0 \
   --panel-url https://your-panel.example.com \
   --token your-xboard-server-token \

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_URL="https://github.com/kiksok/liteone.git"
+REPO_URL="https://github.com/kiksok/SmallX.git"
 INSTALL_DIR="/opt/smallx"
 CONFIG_DIR="/etc/smallx"
 CONFIG_FILE="${CONFIG_DIR}/config.yaml"
