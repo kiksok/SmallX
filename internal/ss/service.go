@@ -125,7 +125,7 @@ func (s *Service) Snapshot(_ context.Context) (model.RuntimeSnapshot, error) {
 			Uptime: int64(time.Since(s.startedAt).Seconds()),
 		},
 		Traffic:  s.traffic.snapshotAndReset(),
-		AliveIPs: s.limits.SnapshotAliveIPs(),
+		AliveIPs: s.online.snapshot(),
 	}, nil
 }
 

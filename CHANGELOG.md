@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.3.3
+
+- Restore activity-based online device reporting behavior similar to `v0.3.0`
+- Keep hard rejection for over-limit TCP and UDP devices
+- Ensure over-limit devices are still excluded from online reports
+
 ## v0.3.2
 
 - Fix active device counting to use real live sessions instead of the looser TTL tracker
