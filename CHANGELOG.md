@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.4.0
+
+- Implement real `speed_limit` enforcement in the `ss-native` data plane
+- Use Xboard `speed_limit` values in Mbps and apply them as shared per-user throughput limits
+- Share the same limiter across upstream and downstream traffic for the same user
+- Add service-level TCP speed limit verification
+
 ## v0.3.3
 
 - Restore activity-based online device reporting behavior similar to `v0.3.0`

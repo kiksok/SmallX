@@ -106,6 +106,49 @@ func TestUDPFullConeMapping(t *testing.T) {
 	}
 }
 
+func TestSpeedLimitAffectsTCPDownstream(t *testing.T) {
+	target, closeTarget := startTCPBurstServer(t, 256*1024)
+	defer closeTarget()
+
+	port := pickFreePort(t)
+	service := NewService(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer func() { _ = service.Close() }()
+
+	cfg := RuntimeConfig{
+		Server: ServerConfig{
+			ListenIP:   "127.0.0.1",
+			ServerPort: port,
+			Cipher:     "aes-256-gcm",
+			EnableTCP:  true,
+			EnableUDP:  false,
+		},
+		Users: []UserConfig{
+			{ID: 1, UUID: "user-1", Method: "aes-256-gcm", Password: "f07a0130-b901-442f-82ca-4bb51113f193", SpeedLimit: 1},
+		},
+	}
+
+	if err := service.Apply(cfg); err != nil {
+		t.Fatalf("Apply returned error: %v", err)
+	}
+
+	def, _ := LookupCipher("aes-256-gcm")
+	masterKey := DeriveMasterKey(def, cfg.Users[0].Password)
+
+	conn, reader, closeConn := openSSClient(t, port, def, masterKey, "127.0.0.2")
+	defer closeConn()
+	sendSSRequest(t, conn, target, []byte("burst"))
+
+	start := time.Now()
+	_, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("ReadAll failed: %v", err)
+	}
+	elapsed := time.Since(start)
+	if elapsed < 800*time.Millisecond {
+		t.Fatalf("expected speed limit to slow transfer, got %s", elapsed)
+	}
+}
+
 func TestDeviceLimitRejectsExtraTCPDevice(t *testing.T) {
 	target, closeTarget := startTCPEchoServer(t)
 	defer closeTarget()
@@ -360,6 +403,34 @@ func startUDPEchoServer(t *testing.T) (string, func()) {
 		}
 	}()
 	return conn.LocalAddr().String(), func() { _ = conn.Close() }
+}
+
+func startTCPBurstServer(t *testing.T, size int) (string, func()) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := make([]byte, size)
+	for i := range payload {
+		payload[i] = byte('a' + (i % 26))
+	}
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
+				buf := make([]byte, 16)
+				_, _ = c.Read(buf)
+				_, _ = c.Write(payload)
+			}(conn)
+		}
+	}()
+	return ln.Addr().String(), func() { _ = ln.Close() }
 }
 
 func startUDPSourceReporter(t *testing.T) (string, func()) {

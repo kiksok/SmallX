@@ -6,18 +6,21 @@ import (
 	"sync"
 
 	"smallx/internal/model"
+	"golang.org/x/time/rate"
 )
 
 type sessionLimiter struct {
-	mu        sync.Mutex
-	tcpCounts map[int]int
-	ipRefs    map[int]map[string]int
+	mu           sync.Mutex
+	tcpCounts    map[int]int
+	ipRefs       map[int]map[string]int
+	speedLimiter map[int]*rate.Limiter
 }
 
 func newSessionLimiter() *sessionLimiter {
 	return &sessionLimiter{
-		tcpCounts: make(map[int]int),
-		ipRefs:    make(map[int]map[string]int),
+		tcpCounts:    make(map[int]int),
+		ipRefs:       make(map[int]map[string]int),
+		speedLimiter: make(map[int]*rate.Limiter),
 	}
 }
 
@@ -120,4 +123,51 @@ func (l *sessionLimiter) SnapshotAliveIPs() []model.AliveIP {
 		})
 	}
 	return out
+}
+
+func (l *sessionLimiter) SyncUsers(users []UserConfig) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	seen := make(map[int]struct{}, len(users))
+	for _, user := range users {
+		seen[user.ID] = struct{}{}
+
+		bytesPerSecond := speedLimitToBytes(user.SpeedLimit)
+		if bytesPerSecond <= 0 {
+			delete(l.speedLimiter, user.ID)
+			continue
+		}
+
+		burst := bytesPerSecond
+		if burst < 64*1024 {
+			burst = 64 * 1024
+		}
+
+		if limiter, ok := l.speedLimiter[user.ID]; ok {
+			limiter.SetLimit(rate.Limit(bytesPerSecond))
+			limiter.SetBurst(burst)
+			continue
+		}
+		l.speedLimiter[user.ID] = rate.NewLimiter(rate.Limit(bytesPerSecond), burst)
+	}
+
+	for userID := range l.speedLimiter {
+		if _, ok := seen[userID]; !ok {
+			delete(l.speedLimiter, userID)
+		}
+	}
+}
+
+func (l *sessionLimiter) GetSpeedLimiter(userID int) *rate.Limiter {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.speedLimiter[userID]
+}
+
+func speedLimitToBytes(speedLimitMbps int) int {
+	if speedLimitMbps <= 0 {
+		return 0
+	}
+	return (speedLimitMbps * 1000 * 1000) / 8
 }

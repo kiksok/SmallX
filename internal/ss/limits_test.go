@@ -37,3 +37,24 @@ func TestSessionLimiterDeviceLimit(t *testing.T) {
 	}
 }
 
+func TestSessionLimiterSpeedLimitSync(t *testing.T) {
+	limiter := newSessionLimiter()
+	limiter.SyncUsers([]UserConfig{
+		{ID: 1, SpeedLimit: 1},
+	})
+
+	bucket := limiter.GetSpeedLimiter(1)
+	if bucket == nil {
+		t.Fatalf("expected speed limiter to exist")
+	}
+	if bucket.Burst() < 64*1024 {
+		t.Fatalf("expected burst to be at least 64k, got %d", bucket.Burst())
+	}
+
+	limiter.SyncUsers([]UserConfig{
+		{ID: 1, SpeedLimit: 0},
+	})
+	if limiter.GetSpeedLimiter(1) != nil {
+		t.Fatalf("expected speed limiter to be removed when speed limit is 0")
+	}
+}

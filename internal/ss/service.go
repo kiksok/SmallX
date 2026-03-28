@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"smallx/internal/model"
+	"golang.org/x/time/rate"
 )
 
 type Service struct {
@@ -52,6 +53,7 @@ type udpSession struct {
 	client netip.AddrPort
 	pc     net.PacketConn
 	done   func()
+	limit  *rate.Limiter
 }
 
 type trafficStore struct {
@@ -97,6 +99,7 @@ func (s *Service) Apply(cfg RuntimeConfig) error {
 	restart := s.tcpLn == nil || s.udpConn == nil || needsRestart(s.cfg, cfg)
 	s.state = state
 	s.cfg = cfg
+	s.limits.SyncUsers(cfg.Users)
 
 	if !restart {
 		s.logger.Info("updated user state without listener restart",
@@ -295,6 +298,7 @@ func (s *Service) handleTCP(conn net.Conn) {
 	defer release()
 
 	s.online.seen(user.Config.ID, clientIP)
+	speedLimiter := s.limits.GetSpeedLimiter(user.Config.ID)
 
 	remote, err := net.DialTimeout("tcp", target, 10*time.Second)
 	if err != nil {
@@ -305,7 +309,7 @@ func (s *Service) handleTCP(conn net.Conn) {
 
 	initialPayload := firstPayload[headerLen:]
 	if len(initialPayload) > 0 {
-		n, err := remote.Write(initialPayload)
+		n, err := writeWithLimit(remote, initialPayload, speedLimiter)
 		if err != nil {
 			s.logger.Warn("failed to write initial payload", slog.Any("error", err))
 			return
@@ -318,7 +322,7 @@ func (s *Service) handleTCP(conn net.Conn) {
 
 	upDone := make(chan error, 1)
 	go func() {
-		_, err := copyCount(remote, ssReader, func(n int) {
+		_, err := copyCount(remote, ssReader, speedLimiter, func(n int) {
 			s.traffic.addUp(user.Config.ID, int64(n))
 		})
 		if tcpConn, ok := remote.(*net.TCPConn); ok {
@@ -327,7 +331,7 @@ func (s *Service) handleTCP(conn net.Conn) {
 		upDone <- err
 	}()
 
-	_, downErr := copyCount(ssWriter, remote, func(n int) {
+	_, downErr := copyCount(ssWriter, remote, speedLimiter, func(n int) {
 		s.traffic.addDown(user.Config.ID, int64(n))
 	})
 	if tcpConn, ok := conn.(*net.TCPConn); ok {
@@ -404,6 +408,10 @@ func (s *Service) handleUDP(serverConn *net.UDPConn, clientAddr netip.AddrPort, 
 		return
 	}
 
+	if err := waitForLimit(session.limit, len(payload)); err != nil {
+		s.logger.Debug("udp upstream rate limit wait failed", slog.Any("error", err))
+		return
+	}
 	if _, err := session.pc.WriteTo(payload, targetAddr); err != nil {
 		s.logger.Debug("udp forward failed", slog.Any("error", err))
 		return
@@ -435,6 +443,7 @@ func (s *Service) getOrCreateUDPSession(serverConn *net.UDPConn, state *serviceS
 		client: clientAddr,
 		pc:     pc,
 		done:   done,
+		limit:  s.limits.GetSpeedLimiter(user.Config.ID),
 	}
 	s.udpSessions[key] = session
 
@@ -472,6 +481,9 @@ func (s *Service) serveUDPSession(key string, serverConn *net.UDPConn, def Ciphe
 		plaintext := append(addrBytes, buf[:n]...)
 		encrypted, err := encryptUDPPacket(def, session.user.MasterKey, plaintext)
 		if err != nil {
+			continue
+		}
+		if err := waitForLimit(session.limit, len(buf[:n])); err != nil {
 			continue
 		}
 		if _, err := serverConn.WriteToUDPAddrPort(encrypted, session.client); err != nil {
@@ -537,13 +549,13 @@ func encryptUDPPacket(def CipherDef, masterKey, plaintext []byte) ([]byte, error
 	return out, nil
 }
 
-func copyCount(dst io.Writer, src io.Reader, onCount func(int)) (int64, error) {
+func copyCount(dst io.Writer, src io.Reader, limiter *rate.Limiter, onCount func(int)) (int64, error) {
 	buf := make([]byte, 32*1024)
 	var total int64
 	for {
 		nr, er := src.Read(buf)
 		if nr > 0 {
-			nw, ew := dst.Write(buf[:nr])
+			nw, ew := writeWithLimit(dst, buf[:nr], limiter)
 			total += int64(nw)
 			if nw > 0 {
 				onCount(nw)
@@ -562,6 +574,20 @@ func copyCount(dst io.Writer, src io.Reader, onCount func(int)) (int64, error) {
 			return total, er
 		}
 	}
+}
+
+func writeWithLimit(dst io.Writer, payload []byte, limiter *rate.Limiter) (int, error) {
+	if err := waitForLimit(limiter, len(payload)); err != nil {
+		return 0, err
+	}
+	return dst.Write(payload)
+}
+
+func waitForLimit(limiter *rate.Limiter, size int) error {
+	if limiter == nil || size <= 0 {
+		return nil
+	}
+	return limiter.WaitN(context.Background(), size)
 }
 
 func (t *trafficStore) addUp(userID int, value int64) {
