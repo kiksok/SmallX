@@ -106,6 +106,101 @@ func TestUDPFullConeMapping(t *testing.T) {
 	}
 }
 
+func TestDeviceLimitRejectsExtraTCPDevice(t *testing.T) {
+	target, closeTarget := startTCPEchoServer(t)
+	defer closeTarget()
+
+	port := pickFreePort(t)
+	service := NewService(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer func() { _ = service.Close() }()
+
+	cfg := RuntimeConfig{
+		Server: ServerConfig{
+			ListenIP:            "127.0.0.1",
+			ServerPort:          port,
+			Cipher:              "aes-256-gcm",
+			EnableTCP:           true,
+			EnableUDP:           false,
+			EnforceDeviceLimit:  true,
+			DefaultTCPConnLimit: 0,
+		},
+		Users: []UserConfig{
+			{ID: 1, UUID: "user-1", Method: "aes-256-gcm", Password: "f07a0130-b901-442f-82ca-4bb51113f193", DeviceLimit: 1},
+		},
+	}
+
+	if err := service.Apply(cfg); err != nil {
+		t.Fatalf("Apply returned error: %v", err)
+	}
+
+	def, _ := LookupCipher("aes-256-gcm")
+	masterKey := DeriveMasterKey(def, cfg.Users[0].Password)
+
+	firstConn, firstReader, firstClose := openSSClient(t, port, def, masterKey, "127.0.0.2")
+	defer firstClose()
+	sendSSRequest(t, firstConn, target, []byte("hold-open"))
+	buf := make([]byte, len("hold-open"))
+	if _, err := io.ReadFull(firstReader, buf); err != nil {
+		t.Fatalf("first client read failed: %v", err)
+	}
+
+	secondConn, secondReader, secondClose := openSSClient(t, port, def, masterKey, "127.0.0.3")
+	defer secondClose()
+	sendSSRequest(t, secondConn, target, []byte("should-fail"))
+	_ = secondConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, err := secondReader.Read(make([]byte, 16))
+	if err == nil {
+		t.Fatalf("expected second device to be disconnected")
+	}
+}
+
+func TestDeviceLimitRejectsExtraUDPDevice(t *testing.T) {
+	target, closeTarget := startUDPEchoServer(t)
+	defer closeTarget()
+
+	port := pickFreePort(t)
+	service := NewService(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer func() { _ = service.Close() }()
+
+	cfg := RuntimeConfig{
+		Server: ServerConfig{
+			ListenIP:           "127.0.0.1",
+			ServerPort:         port,
+			Cipher:             "aes-256-gcm",
+			EnableTCP:          false,
+			EnableUDP:          true,
+			EnforceDeviceLimit: true,
+		},
+		Users: []UserConfig{
+			{ID: 1, UUID: "user-1", Method: "aes-256-gcm", Password: "f07a0130-b901-442f-82ca-4bb51113f193", DeviceLimit: 1},
+		},
+	}
+
+	if err := service.Apply(cfg); err != nil {
+		t.Fatalf("Apply returned error: %v", err)
+	}
+
+	def, _ := LookupCipher("aes-256-gcm")
+	masterKey := DeriveMasterKey(def, cfg.Users[0].Password)
+
+	firstUDP := bindUDPClient(t, "127.0.0.2")
+	defer firstUDP.Close()
+	got1, err := udpReporterRoundTripFromConn(firstUDP, port, def, masterKey, target, "allowed-udp")
+	if err != nil {
+		t.Fatalf("first udp roundtrip failed: %v", err)
+	}
+	if got1 != "allowed-udp" {
+		t.Fatalf("unexpected first udp payload: %s", got1)
+	}
+
+	secondUDP := bindUDPClient(t, "127.0.0.3")
+	defer secondUDP.Close()
+	_, err = udpReporterRoundTripFromConn(secondUDP, port, def, masterKey, target, "blocked-udp")
+	if err == nil {
+		t.Fatalf("expected second udp device to be blocked")
+	}
+}
+
 func testTCPRoundTrip(port int, def CipherDef, masterKey []byte, target string) error {
 	conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", itoa(port)), 3*time.Second)
 	if err != nil {
@@ -180,6 +275,10 @@ func testUDPRoundTrip(port int, def CipherDef, masterKey []byte, target string) 
 }
 
 func udpReporterRoundTrip(conn *net.UDPConn, port int, def CipherDef, masterKey []byte, target string, payload string) (string, error) {
+	return udpReporterRoundTripFromConn(conn, port, def, masterKey, target, payload)
+}
+
+func udpReporterRoundTripFromConn(conn *net.UDPConn, port int, def CipherDef, masterKey []byte, target string, payload string) (string, error) {
 	serverAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:"+itoa(port))
 	if err != nil {
 		return "", err
@@ -269,6 +368,44 @@ func startUDPSourceReporter(t *testing.T) (string, func()) {
 		}
 	}()
 	return conn.LocalAddr().String(), func() { _ = conn.Close() }
+}
+
+func openSSClient(t *testing.T, port int, def CipherDef, masterKey []byte, localIP string) (net.Conn, io.Reader, func()) {
+	t.Helper()
+	dialer := &net.Dialer{
+		LocalAddr: &net.TCPAddr{IP: net.ParseIP(localIP)},
+		Timeout:   3 * time.Second,
+	}
+	conn, err := dialer.Dial("tcp", "127.0.0.1:"+itoa(port))
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+	reader := NewClientStreamReader(conn, def, masterKey)
+	return conn, reader, func() { _ = conn.Close() }
+}
+
+func sendSSRequest(t *testing.T, conn net.Conn, target string, payload []byte) {
+	t.Helper()
+	def, _ := LookupCipher("aes-256-gcm")
+	masterKey := DeriveMasterKey(def, "f07a0130-b901-442f-82ca-4bb51113f193")
+	writer := NewStreamWriter(conn, def, masterKey)
+	addr, err := EncodeAddr(target)
+	if err != nil {
+		t.Fatalf("EncodeAddr failed: %v", err)
+	}
+	if _, err := writer.Write(append(addr, payload...)); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+}
+
+func bindUDPClient(t *testing.T, ip string) *net.UDPConn {
+	t.Helper()
+	addr := &net.UDPAddr{IP: net.ParseIP(ip), Port: 0}
+	conn, err := net.ListenUDP("udp", addr)
+	if err != nil {
+		t.Fatalf("ListenUDP failed: %v", err)
+	}
+	return conn
 }
 
 func pickFreePort(t *testing.T) int {

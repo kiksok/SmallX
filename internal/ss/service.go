@@ -279,14 +279,22 @@ func (s *Service) handleTCP(conn net.Conn) {
 		return
 	}
 
-	release, err := s.limits.AcquireTCP(user.Config, RemoteIP(conn.RemoteAddr()), state.Config.Server.EnforceDeviceLimit)
+	clientIP := RemoteIP(conn.RemoteAddr())
+	release, err := s.limits.AcquireTCP(user.Config, clientIP, state.Config.Server.EnforceDeviceLimit)
 	if err != nil {
-		s.logger.Warn("tcp client rejected", slog.Any("error", err), slog.Int("user_id", user.Config.ID))
+		s.logger.Warn("tcp client rejected",
+			slog.Any("error", err),
+			slog.Int("user_id", user.Config.ID),
+			slog.String("client_ip", clientIP),
+		)
+		if tcpConn, ok := conn.(*net.TCPConn); ok {
+			_ = tcpConn.SetLinger(0)
+		}
 		return
 	}
 	defer release()
 
-	s.online.seen(user.Config.ID, RemoteIP(conn.RemoteAddr()))
+	s.online.seen(user.Config.ID, clientIP)
 
 	remote, err := net.DialTimeout("tcp", target, 10*time.Second)
 	if err != nil {
@@ -378,13 +386,17 @@ func (s *Service) handleUDP(serverConn *net.UDPConn, clientAddr netip.AddrPort, 
 		return
 	}
 
-	s.online.seen(user.Config.ID, clientAddr.Addr().String())
-
 	session, err := s.getOrCreateUDPSession(serverConn, state, user, clientAddr)
 	if err != nil {
-		s.logger.Warn("udp session create failed", slog.Any("error", err))
+		s.logger.Warn("udp session create failed",
+			slog.Any("error", err),
+			slog.Int("user_id", user.Config.ID),
+			slog.String("client_ip", clientAddr.Addr().String()),
+		)
 		return
 	}
+
+	s.online.seen(user.Config.ID, clientAddr.Addr().String())
 
 	targetAddr, err := net.ResolveUDPAddr("udp", target)
 	if err != nil {

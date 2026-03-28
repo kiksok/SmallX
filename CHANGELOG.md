@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.3.1
+
+- Fix device limit enforcement so excess TCP devices are disconnected immediately
+- Fix device limit enforcement so excess UDP devices are dropped immediately
+- Avoid reporting over-limit devices as online before admission succeeds
+- Add service-level TCP and UDP device limit tests
+
 ## v0.3.0
 
 - Add UDP FullCone-style mapping test coverage

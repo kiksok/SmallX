@@ -2,7 +2,7 @@
 
 `smallX` is a lightweight Xboard-compatible backend project with a small control plane and an install flow aimed at simple self-hosting.
 
-Current version: `v0.3.0`
+Current version: `v0.3.1`
 
 The goal is not to embed a full protocol core like XrayR does. Instead, this project keeps the control layer small and focuses on:
 
@@ -52,7 +52,7 @@ The currently verified runtime path is:
 - UDP FullCone-style mapping behavior
 - Xboard `UniProxy` control-plane pull/push
 - Per-user TCP connection limits
-- Single-machine IP/device limit enforcement
+- Single-machine IP/device limit enforcement with hard reject of excess devices
 - Local allow/block target rules
 - Remote Xboard block route enforcement
 
