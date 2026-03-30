@@ -13,13 +13,15 @@ type SSNative struct {
 	logger  *slog.Logger
 	service *ss.Service
 	runtime config.RuntimeConfig
+	passx   config.PassXConfig
 }
 
-func NewSSNative(runtime config.RuntimeConfig, logger *slog.Logger) (*SSNative, error) {
+func NewSSNative(runtime config.RuntimeConfig, passx config.PassXConfig, logger *slog.Logger) (*SSNative, error) {
 	return &SSNative{
 		logger:  logger.With(slog.String("runtime", "ss-native")),
 		service: ss.NewService(logger),
 		runtime: runtime,
+		passx:   passx,
 	}, nil
 }
 
@@ -33,6 +35,10 @@ func (s *SSNative) Apply(_ context.Context, plan model.RuntimePlan) error {
 		EnforceDeviceLimit:  s.runtime.DeviceLimitEnabled(),
 		AllowTargets:        append([]string(nil), s.runtime.AllowTargets...),
 		BlockTargets:        append([]string(nil), s.runtime.BlockTargets...),
+		PassX: ss.PassXConfig{
+			Enabled:      s.passx.Enabled,
+			TrustedCIDRs: append([]string(nil), s.passx.TrustedCIDRs...),
+		},
 	})
 	if err != nil {
 		return err

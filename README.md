@@ -2,7 +2,7 @@
 
 `smallX` is a lightweight Xboard-compatible backend project with a small control plane and an install flow aimed at simple self-hosting.
 
-Current version: `v0.4.0`
+Current version: `v0.5.0`
 
 The goal is not to embed a full protocol core like XrayR does. Instead, this project keeps the control layer small and focuses on:
 
@@ -17,7 +17,7 @@ After comparing XrayR, Xboard UniProxy, and Soga v1 WebAPI, the real control-pla
 
 - pull node config
 - pull users
-- optionally pull rules
+- read route rules from node config when the panel includes them
 - push traffic
 - push alive IPs
 - push node status
@@ -31,6 +31,7 @@ This first scaffold includes:
 - config loader
 - provider abstraction
 - Xboard provider implementation with ETag support
+- alignment with `cedar2025/Xboard` `UniProxy` semantics, where route rules are included in the node config payload
 - sync agent loop
 - dry-run runtime adapter
 - SS prototype translator for Xboard Shadowsocks nodes, including:

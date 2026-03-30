@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.5.0
+
+- Add PassX real-IP access layer for `ss-native` with TCP PROXY v2 and UDP PX header support
+- Distinguish UDP transport addresses from real client addresses so replies stay on the tunnel path
+- Add TrustedCIDRs compilation and trust checks for PassX transports, including zero-address rejection for trusted PX headers
+- Preserve direct-connect compatibility while safely ignoring spoofed PassX headers from untrusted transports
+- Optimize Xboard `FetchUsers` with streaming `msgpack` decoding and strict JSON fallback handling
+- Align the Xboard provider with `cedar2025/Xboard` `UniProxy` semantics where route rules are included in node config
+- Add provider and service-level regression coverage for PassX trust handling and user-list decoding
+
 ## v0.4.0
 
 - Implement real `speed_limit` enforcement in the `ss-native` data plane

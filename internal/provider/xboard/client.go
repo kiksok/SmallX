@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/vmihailenco/msgpack/v5"
 	"smallx/internal/config"
 	"smallx/internal/model"
 )
@@ -21,8 +22,9 @@ type Client struct {
 	http   *http.Client
 	logger *slog.Logger
 
-	mu    sync.Mutex
-	etags map[string]string
+	mu                       sync.Mutex
+	etags                    map[string]string
+	usersJSONFallbackLogOnce sync.Once
 }
 
 func New(cfg config.PanelConfig, logger *slog.Logger) *Client {
@@ -46,22 +48,17 @@ func (c *Client) FetchNode(ctx context.Context) (model.NodeConfig, bool, error) 
 
 func (c *Client) FetchUsers(ctx context.Context) ([]model.UserInfo, bool, error) {
 	var payload struct {
-		Users []model.UserInfo `json:"users"`
+		Users []model.UserInfo `json:"users" msgpack:"users"`
 	}
-	changed, err := c.getJSON(ctx, "/api/v1/server/UniProxy/user", "users", &payload)
+	changed, err := c.getUsers(ctx, "/api/v1/server/UniProxy/user", "users", &payload)
 	return payload.Users, changed, err
 }
 
 func (c *Client) FetchRules(ctx context.Context) ([]model.AuditRule, bool, error) {
-	var rules []model.AuditRule
-	changed, err := c.getJSON(ctx, "/api/v1/server/UniProxy/rules", "rules", &rules)
-	if err != nil {
-		if isNotFound(err) {
-			return nil, false, nil
-		}
-		return nil, false, err
-	}
-	return rules, changed, nil
+	// cedar2025/Xboard ships route rules inside UniProxy config payloads.
+	// There is no separate UniProxy/rules endpoint in the upstream panel, so
+	// SmallX intentionally treats standalone rule fetches as unsupported.
+	return nil, false, nil
 }
 
 func (c *Client) ReportTraffic(ctx context.Context, traffic []model.TrafficReport) error {
@@ -95,6 +92,43 @@ func (c *Client) ReportAudits(ctx context.Context, audits []model.AuditLog) erro
 		return nil
 	}
 	return nil
+}
+
+func (c *Client) getUsers(ctx context.Context, path, cacheKey string, out any) (bool, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.makeURL(path), nil)
+	if err != nil {
+		return false, err
+	}
+	c.addQuery(req)
+	req.Header.Set("Accept", "application/msgpack, application/x-msgpack, application/json")
+	if etag := c.getETag(cacheKey); etag != "" {
+		req.Header.Set("If-None-Match", etag)
+	}
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotModified {
+		return false, nil
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return false, fmt.Errorf("not found: %s", path)
+	}
+	if resp.StatusCode >= 300 {
+		return false, fmt.Errorf("GET %s failed: %s", path, resp.Status)
+	}
+
+	if etag := resp.Header.Get("ETag"); etag != "" {
+		c.setETag(cacheKey, etag)
+	}
+	if err := c.decodeUsersResponse(resp, path, out); err != nil {
+		return false, err
+	}
+
+	return true, nil
 }
 
 func (c *Client) getJSON(ctx context.Context, path, cacheKey string, out any) (bool, error) {
@@ -132,6 +166,30 @@ func (c *Client) getJSON(ctx context.Context, path, cacheKey string, out any) (b
 	}
 
 	return true, nil
+}
+
+func (c *Client) decodeUsersResponse(resp *http.Response, path string, out any) error {
+	contentType := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Type")))
+
+	switch {
+	case strings.Contains(contentType, "application/msgpack"), strings.Contains(contentType, "application/x-msgpack"):
+		decoder := msgpack.NewDecoder(resp.Body)
+		decoder.SetCustomStructTag("json")
+		if err := decoder.Decode(out); err != nil {
+			return fmt.Errorf("decode %s msgpack: %w", path, err)
+		}
+		return nil
+	case contentType == "", strings.Contains(contentType, "application/json"):
+		c.usersJSONFallbackLogOnce.Do(func() {
+			c.logger.Debug("panel returned json user payload, msgpack not supported")
+		})
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			return fmt.Errorf("decode %s json: %w", path, err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("decode %s: unsupported content-type: %s", path, contentType)
+	}
 }
 
 func (c *Client) postJSON(ctx context.Context, path string, body any) error {

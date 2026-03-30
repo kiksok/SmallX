@@ -14,6 +14,7 @@ type Config struct {
 	Panel   PanelConfig   `yaml:"panel"`
 	Sync    SyncConfig    `yaml:"sync"`
 	Runtime RuntimeConfig `yaml:"runtime"`
+	PassX   PassXConfig   `yaml:"passx"`
 	Log     LogConfig     `yaml:"log"`
 }
 
@@ -39,6 +40,11 @@ type RuntimeConfig struct {
 	EnforceDeviceLimit  *bool    `yaml:"enforce_device_limit"`
 	AllowTargets        []string `yaml:"allow_targets"`
 	BlockTargets        []string `yaml:"block_targets"`
+}
+
+type PassXConfig struct {
+	Enabled      bool     `yaml:"enabled"`
+	TrustedCIDRs []string `yaml:"trusted_cidrs"`
 }
 
 type LogConfig struct {

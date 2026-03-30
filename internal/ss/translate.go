@@ -12,21 +12,22 @@ import (
 type RuntimeConfig struct {
 	Server ServerConfig
 	Users  []UserConfig
+	PassX  PassXConfig
 }
 
 type ServerConfig struct {
-	ListenIP           string
-	ServerPort         int
-	Cipher             string
-	ServerKey          string
-	EnableTCP          bool
-	EnableUDP          bool
-	Obfs               ObfsConfig
+	ListenIP            string
+	ServerPort          int
+	Cipher              string
+	ServerKey           string
+	EnableTCP           bool
+	EnableUDP           bool
+	Obfs                ObfsConfig
 	DefaultTCPConnLimit int
-	EnforceDeviceLimit bool
-	AllowTargets       []string
-	BlockTargets       []string
-	Routes             []model.RouteRule
+	EnforceDeviceLimit  bool
+	AllowTargets        []string
+	BlockTargets        []string
+	Routes              []model.RouteRule
 }
 
 type UserConfig struct {
@@ -37,6 +38,11 @@ type UserConfig struct {
 	SpeedLimit   int
 	DeviceLimit  int
 	TCPConnLimit int
+}
+
+type PassXConfig struct {
+	Enabled      bool
+	TrustedCIDRs []string
 }
 
 type ObfsConfig struct {
@@ -57,15 +63,16 @@ type Options struct {
 	EnforceDeviceLimit  bool
 	AllowTargets        []string
 	BlockTargets        []string
+	PassX               PassXConfig
 }
 
 var supportedCiphers = map[string]CipherSpec{
-	"chacha20-ietf-poly1305":   {Name: "chacha20-ietf-poly1305"},
-	"aes-128-gcm":              {Name: "aes-128-gcm"},
-	"aes-192-gcm":              {Name: "aes-192-gcm"},
-	"aes-256-gcm":              {Name: "aes-256-gcm"},
-	"2022-blake3-aes-128-gcm":  {Name: "2022-blake3-aes-128-gcm", Is2022: true, UserKeySize: 16},
-	"2022-blake3-aes-256-gcm":  {Name: "2022-blake3-aes-256-gcm", Is2022: true, UserKeySize: 32},
+	"chacha20-ietf-poly1305":  {Name: "chacha20-ietf-poly1305"},
+	"aes-128-gcm":             {Name: "aes-128-gcm"},
+	"aes-192-gcm":             {Name: "aes-192-gcm"},
+	"aes-256-gcm":             {Name: "aes-256-gcm"},
+	"2022-blake3-aes-128-gcm": {Name: "2022-blake3-aes-128-gcm", Is2022: true, UserKeySize: 16},
+	"2022-blake3-aes-256-gcm": {Name: "2022-blake3-aes-256-gcm", Is2022: true, UserKeySize: 32},
 }
 
 func Translate(node model.NodeConfig, users []model.UserInfo, options Options) (RuntimeConfig, error) {
@@ -106,6 +113,10 @@ func Translate(node model.NodeConfig, users []model.UserInfo, options Options) (
 			Routes:              append([]model.RouteRule(nil), node.Routes...),
 		},
 		Users: make([]UserConfig, 0, len(users)),
+		PassX: PassXConfig{
+			Enabled:      options.PassX.Enabled,
+			TrustedCIDRs: append([]string(nil), options.PassX.TrustedCIDRs...),
+		},
 	}
 
 	for _, user := range users {

@@ -19,5 +19,9 @@ runtime:
   allow_targets: []
   block_targets: []
 
+passx:
+  enabled: false
+  trusted_cidrs: []
+
 log:
   level: info

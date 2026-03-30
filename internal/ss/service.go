@@ -13,8 +13,9 @@ import (
 	"sync"
 	"time"
 
-	"smallx/internal/model"
+	"github.com/pires/go-proxyproto"
 	"golang.org/x/time/rate"
+	"smallx/internal/model"
 )
 
 type Service struct {
@@ -33,7 +34,7 @@ type Service struct {
 	limits  *sessionLimiter
 
 	udpMu       sync.Mutex
-	udpSessions map[string]*udpSession
+	udpSessions map[udpSessionKey]*udpSession
 }
 
 type serviceState struct {
@@ -41,6 +42,7 @@ type serviceState struct {
 	Cipher CipherDef
 	Users  []*UserEntry
 	Rules  *targetRules
+	PassX  passXAccess
 }
 
 type UserEntry struct {
@@ -49,11 +51,17 @@ type UserEntry struct {
 }
 
 type udpSession struct {
-	user   *UserEntry
-	client netip.AddrPort
-	pc     net.PacketConn
-	done   func()
-	limit  *rate.Limiter
+	user     *UserEntry
+	identity ClientIdentity
+	pc       net.PacketConn
+	done     func()
+	limit    *rate.Limiter
+}
+
+type udpSessionKey struct {
+	UserID    int
+	Transport netip.AddrPort
+	Real      netip.AddrPort
 }
 
 type trafficStore struct {
@@ -79,7 +87,7 @@ func NewService(logger *slog.Logger) *Service {
 		traffic:     &trafficStore{data: make(map[int]*trafficValue)},
 		online:      &onlineTracker{ttl: 5 * time.Minute, data: make(map[int]map[string]time.Time)},
 		limits:      newSessionLimiter(),
-		udpSessions: make(map[string]*udpSession),
+		udpSessions: make(map[udpSessionKey]*udpSession),
 	}
 }
 
@@ -91,10 +99,12 @@ func (s *Service) Apply(cfg RuntimeConfig) error {
 		return errors.New("service is closed")
 	}
 
+	previousState := s.state
 	state, err := buildState(cfg)
 	if err != nil {
 		return err
 	}
+	s.logPassXStateChanges(previousState, state)
 
 	restart := s.tcpLn == nil || s.udpConn == nil || needsRestart(s.cfg, cfg)
 	s.state = state
@@ -179,12 +189,14 @@ func buildState(cfg RuntimeConfig) (*serviceState, error) {
 	if err != nil {
 		return nil, err
 	}
+	passx := compilePassXAccess(cfg.PassX)
 
 	return &serviceState{
 		Config: cfg,
 		Cipher: def,
 		Users:  users,
 		Rules:  rules,
+		PassX:  passx,
 	}, nil
 }
 
@@ -193,7 +205,8 @@ func needsRestart(oldCfg, newCfg RuntimeConfig) bool {
 		oldCfg.Server.ServerPort != newCfg.Server.ServerPort ||
 		oldCfg.Server.Cipher != newCfg.Server.Cipher ||
 		oldCfg.Server.EnableTCP != newCfg.Server.EnableTCP ||
-		oldCfg.Server.EnableUDP != newCfg.Server.EnableUDP
+		oldCfg.Server.EnableUDP != newCfg.Server.EnableUDP ||
+		oldCfg.PassX.Enabled != newCfg.PassX.Enabled
 }
 
 func (s *Service) restartLocked() error {
@@ -213,6 +226,21 @@ func (s *Service) restartLocked() error {
 		ln, err := net.Listen("tcp", listenAddr)
 		if err != nil {
 			return err
+		}
+		if s.cfg.PassX.Enabled {
+			ln = &proxyproto.Listener{
+				Listener: ln,
+				Policy: func(upstream net.Addr) (proxyproto.Policy, error) {
+					addr, ok := addrPortFromNetAddr(upstream)
+					if !ok {
+						return proxyproto.IGNORE, nil
+					}
+					if s.isTrustedTransport(addr) {
+						return proxyproto.USE, nil
+					}
+					return proxyproto.IGNORE, nil
+				},
+			}
 		}
 		s.tcpLn = ln
 		go s.serveTCP(ln)
@@ -282,7 +310,8 @@ func (s *Service) handleTCP(conn net.Conn) {
 		return
 	}
 
-	clientIP := RemoteIP(conn.RemoteAddr())
+	identity := resolveTCPIdentity(conn)
+	clientIP := identity.RealIP()
 	release, err := s.limits.AcquireTCP(user.Config, clientIP, state.Config.Server.EnforceDeviceLimit)
 	if err != nil {
 		s.logger.Warn("tcp client rejected",
@@ -290,9 +319,7 @@ func (s *Service) handleTCP(conn net.Conn) {
 			slog.Int("user_id", user.Config.ID),
 			slog.String("client_ip", clientIP),
 		)
-		if tcpConn, ok := conn.(*net.TCPConn); ok {
-			_ = tcpConn.SetLinger(0)
-		}
+		setLinger(conn, 0)
 		return
 	}
 	defer release()
@@ -325,18 +352,14 @@ func (s *Service) handleTCP(conn net.Conn) {
 		_, err := copyCount(remote, ssReader, speedLimiter, func(n int) {
 			s.traffic.addUp(user.Config.ID, int64(n))
 		})
-		if tcpConn, ok := remote.(*net.TCPConn); ok {
-			_ = tcpConn.CloseWrite()
-		}
+		closeWrite(remote)
 		upDone <- err
 	}()
 
 	_, downErr := copyCount(ssWriter, remote, speedLimiter, func(n int) {
 		s.traffic.addDown(user.Config.ID, int64(n))
 	})
-	if tcpConn, ok := conn.(*net.TCPConn); ok {
-		_ = tcpConn.CloseWrite()
-	}
+	closeWrite(conn)
 
 	upErr := <-upDone
 	if downErr != nil && !errors.Is(downErr, io.EOF) {
@@ -350,7 +373,7 @@ func (s *Service) handleTCP(conn net.Conn) {
 func (s *Service) serveUDP(conn *net.UDPConn) {
 	buf := make([]byte, 64*1024)
 	for {
-		n, clientAddr, err := conn.ReadFromUDPAddrPort(buf)
+		n, transportAddr, err := conn.ReadFromUDPAddrPort(buf)
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
 				return
@@ -359,17 +382,31 @@ func (s *Service) serveUDP(conn *net.UDPConn) {
 			continue
 		}
 
-		packet := append([]byte(nil), buf[:n]...)
-		go s.handleUDP(conn, clientAddr, packet)
+		state := s.currentState()
+		if state == nil || len(state.Users) == 0 {
+			continue
+		}
+
+		packet := buf[:n]
+		trustedTransport := state.PassX.isTrustedTransport(transportAddr)
+		if state.PassX.Enabled && !trustedTransport && looksLikePassXHeader(packet) {
+			s.logger.Debug("ignoring passx header from untrusted udp transport",
+				slog.String("transport", transportAddr.String()),
+			)
+		}
+
+		identity, payloadOffset, err := resolveUDPIdentity(packet, transportAddr, trustedTransport)
+		if err != nil {
+			s.logger.Debug("udp identity resolve failed", slog.Any("error", err), slog.String("transport", transportAddr.String()))
+			continue
+		}
+
+		payload := append([]byte(nil), buf[payloadOffset:n]...)
+		go s.handleUDP(conn, state, identity, payload)
 	}
 }
 
-func (s *Service) handleUDP(serverConn *net.UDPConn, clientAddr netip.AddrPort, packet []byte) {
-	state := s.currentState()
-	if state == nil || len(state.Users) == 0 {
-		return
-	}
-
+func (s *Service) handleUDP(serverConn *net.UDPConn, state *serviceState, identity ClientIdentity, packet []byte) {
 	user, plaintext, err := decryptUDPPacket(state.Cipher, state.Users, packet)
 	if err != nil {
 		s.logger.Debug("udp packet rejected", slog.Any("error", err))
@@ -390,17 +427,17 @@ func (s *Service) handleUDP(serverConn *net.UDPConn, clientAddr netip.AddrPort, 
 		return
 	}
 
-	session, err := s.getOrCreateUDPSession(serverConn, state, user, clientAddr)
+	session, err := s.getOrCreateUDPSession(serverConn, state, user, identity)
 	if err != nil {
 		s.logger.Warn("udp session create failed",
 			slog.Any("error", err),
 			slog.Int("user_id", user.Config.ID),
-			slog.String("client_ip", clientAddr.Addr().String()),
+			slog.String("client_ip", identity.RealIP()),
 		)
 		return
 	}
 
-	s.online.seen(user.Config.ID, clientAddr.Addr().String())
+	s.online.seen(user.Config.ID, identity.RealIP())
 
 	targetAddr, err := net.ResolveUDPAddr("udp", target)
 	if err != nil {
@@ -419,8 +456,12 @@ func (s *Service) handleUDP(serverConn *net.UDPConn, clientAddr netip.AddrPort, 
 	s.traffic.addUp(user.Config.ID, int64(len(payload)))
 }
 
-func (s *Service) getOrCreateUDPSession(serverConn *net.UDPConn, state *serviceState, user *UserEntry, clientAddr netip.AddrPort) (*udpSession, error) {
-	key := fmt.Sprintf("%d|%s", user.Config.ID, clientAddr.String())
+func (s *Service) getOrCreateUDPSession(serverConn *net.UDPConn, state *serviceState, user *UserEntry, identity ClientIdentity) (*udpSession, error) {
+	key := udpSessionKey{
+		UserID:    user.Config.ID,
+		Transport: identity.TransportAddr,
+		Real:      identity.RealAddr,
+	}
 
 	s.udpMu.Lock()
 	defer s.udpMu.Unlock()
@@ -432,18 +473,18 @@ func (s *Service) getOrCreateUDPSession(serverConn *net.UDPConn, state *serviceS
 	if err != nil {
 		return nil, err
 	}
-	done, err := s.limits.AcquireUDP(user.Config, clientAddr.Addr().String(), state.Config.Server.EnforceDeviceLimit)
+	done, err := s.limits.AcquireUDP(user.Config, identity.RealIP(), state.Config.Server.EnforceDeviceLimit)
 	if err != nil {
 		_ = pc.Close()
 		return nil, err
 	}
 
 	session := &udpSession{
-		user:   user,
-		client: clientAddr,
-		pc:     pc,
-		done:   done,
-		limit:  s.limits.GetSpeedLimiter(user.Config.ID),
+		user:     user,
+		identity: identity,
+		pc:       pc,
+		done:     done,
+		limit:    s.limits.GetSpeedLimiter(user.Config.ID),
 	}
 	s.udpSessions[key] = session
 
@@ -451,7 +492,7 @@ func (s *Service) getOrCreateUDPSession(serverConn *net.UDPConn, state *serviceS
 	return session, nil
 }
 
-func (s *Service) serveUDPSession(key string, serverConn *net.UDPConn, def CipherDef, session *udpSession) {
+func (s *Service) serveUDPSession(key udpSessionKey, serverConn *net.UDPConn, def CipherDef, session *udpSession) {
 	defer func() {
 		if session.done != nil {
 			session.done()
@@ -486,7 +527,7 @@ func (s *Service) serveUDPSession(key string, serverConn *net.UDPConn, def Ciphe
 		if err := waitForLimit(session.limit, len(buf[:n])); err != nil {
 			continue
 		}
-		if _, err := serverConn.WriteToUDPAddrPort(encrypted, session.client); err != nil {
+		if _, err := serverConn.WriteToUDPAddrPort(encrypted, session.identity.TransportAddr); err != nil {
 			continue
 		}
 		s.traffic.addDown(session.user.Config.ID, int64(n))
@@ -506,6 +547,63 @@ func (s *Service) currentState() *serviceState {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.state
+}
+
+func (s *Service) isTrustedTransport(addr netip.AddrPort) bool {
+	state := s.currentState()
+	if state == nil {
+		return false
+	}
+	return state.PassX.isTrustedTransport(addr)
+}
+
+func (s *Service) logPassXStateChanges(previous, next *serviceState) {
+	var previousPassX passXAccess
+	if previous != nil {
+		previousPassX = previous.PassX
+	}
+
+	if !passXSettingsChanged(previousPassX, next.PassX) {
+		return
+	}
+
+	for _, item := range next.PassX.InvalidCIDRs {
+		s.logger.Warn("ignoring invalid passx trusted cidr", slog.String("cidr", item))
+	}
+
+	if next.PassX.Enabled && !next.PassX.hasTrustedPrefixes() {
+		s.logger.Error("PassX enabled but TrustedCIDRs are empty; trusting all transports is a serious security risk")
+	}
+}
+
+func closeWrite(conn net.Conn) {
+	type tcpConnProvider interface {
+		TCPConn() (*net.TCPConn, bool)
+	}
+
+	switch value := conn.(type) {
+	case *net.TCPConn:
+		_ = value.CloseWrite()
+	case tcpConnProvider:
+		if tcpConn, ok := value.TCPConn(); ok {
+			_ = tcpConn.CloseWrite()
+		}
+	}
+}
+
+func setLinger(conn net.Conn, seconds int) {
+	type tcpConnProvider interface {
+		TCPConn() (*net.TCPConn, bool)
+	}
+
+	switch value := conn.(type) {
+	case *net.TCPConn:
+		_ = value.SetLinger(seconds)
+	case tcpConnProvider:
+		if tcpConn, ok := value.TCPConn(); ok {
+			_ = tcpConn.SetLinger(seconds)
+		}
+	}
 }
 
 func decryptUDPPacket(def CipherDef, users []*UserEntry, packet []byte) (*UserEntry, []byte, error) {

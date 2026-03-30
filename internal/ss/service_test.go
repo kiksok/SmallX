@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/netip"
 	"testing"
 	"time"
 )
@@ -255,6 +256,134 @@ func TestDeviceLimitRejectsExtraUDPDevice(t *testing.T) {
 	}
 }
 
+func TestUDPPassXUsesRealIPAndReturnsViaTransportAddr(t *testing.T) {
+	target, closeTarget := startUDPEchoServer(t)
+	defer closeTarget()
+
+	port := pickFreePort(t)
+	service := NewService(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer func() { _ = service.Close() }()
+
+	cfg := RuntimeConfig{
+		Server: ServerConfig{
+			ListenIP:           "127.0.0.1",
+			ServerPort:         port,
+			Cipher:             "aes-256-gcm",
+			EnableTCP:          false,
+			EnableUDP:          true,
+			EnforceDeviceLimit: true,
+		},
+		Users: []UserConfig{
+			{ID: 1, UUID: "user-1", Method: "aes-256-gcm", Password: "f07a0130-b901-442f-82ca-4bb51113f193", DeviceLimit: 1},
+		},
+		PassX: PassXConfig{
+			Enabled: true,
+		},
+	}
+
+	if err := service.Apply(cfg); err != nil {
+		t.Fatalf("Apply returned error: %v", err)
+	}
+
+	def, _ := LookupCipher("aes-256-gcm")
+	masterKey := DeriveMasterKey(def, cfg.Users[0].Password)
+	realAddr := netip.MustParseAddrPort("127.0.0.9:41000")
+
+	firstUDP := bindUDPClient(t, "127.0.0.2")
+	defer firstUDP.Close()
+	got1, err := passXUDPRoundTripFromConn(firstUDP, port, def, masterKey, target, "through-passx-1", realAddr)
+	if err != nil {
+		t.Fatalf("first udp roundtrip failed: %v", err)
+	}
+	if got1 != "through-passx-1" {
+		t.Fatalf("unexpected first udp payload: %s", got1)
+	}
+
+	secondUDP := bindUDPClient(t, "127.0.0.3")
+	defer secondUDP.Close()
+	got2, err := passXUDPRoundTripFromConn(secondUDP, port, def, masterKey, target, "through-passx-2", realAddr)
+	if err != nil {
+		t.Fatalf("second udp roundtrip failed: %v", err)
+	}
+	if got2 != "through-passx-2" {
+		t.Fatalf("unexpected second udp payload: %s", got2)
+	}
+
+	snapshot, err := service.Snapshot(nil)
+	if err != nil {
+		t.Fatalf("Snapshot returned error: %v", err)
+	}
+	if len(snapshot.AliveIPs) != 1 {
+		t.Fatalf("expected exactly one active user alive record, got %d", len(snapshot.AliveIPs))
+	}
+	if len(snapshot.AliveIPs[0].IPs) != 1 || snapshot.AliveIPs[0].IPs[0] != realAddr.Addr().String() {
+		t.Fatalf("expected only the real client IP to be counted online, got %+v", snapshot.AliveIPs[0].IPs)
+	}
+}
+
+func TestUDPPassXRejectsSpoofedHeaderFromUntrustedTransport(t *testing.T) {
+	target, closeTarget := startUDPEchoServer(t)
+	defer closeTarget()
+
+	port := pickFreePort(t)
+	service := NewService(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer func() { _ = service.Close() }()
+
+	cfg := RuntimeConfig{
+		Server: ServerConfig{
+			ListenIP:           "127.0.0.1",
+			ServerPort:         port,
+			Cipher:             "aes-256-gcm",
+			EnableTCP:          false,
+			EnableUDP:          true,
+			EnforceDeviceLimit: true,
+		},
+		Users: []UserConfig{
+			{ID: 1, UUID: "user-1", Method: "aes-256-gcm", Password: "f07a0130-b901-442f-82ca-4bb51113f193", DeviceLimit: 1},
+		},
+		PassX: PassXConfig{
+			Enabled:      true,
+			TrustedCIDRs: []string{"127.0.0.2"},
+		},
+	}
+
+	if err := service.Apply(cfg); err != nil {
+		t.Fatalf("Apply returned error: %v", err)
+	}
+
+	def, _ := LookupCipher("aes-256-gcm")
+	masterKey := DeriveMasterKey(def, cfg.Users[0].Password)
+
+	trustedConn := bindUDPClient(t, "127.0.0.2")
+	defer trustedConn.Close()
+	trustedReal := netip.MustParseAddrPort("127.0.0.9:41000")
+	got, err := passXUDPRoundTripFromConn(trustedConn, port, def, masterKey, target, "trusted-passx", trustedReal)
+	if err != nil {
+		t.Fatalf("trusted udp roundtrip failed: %v", err)
+	}
+	if got != "trusted-passx" {
+		t.Fatalf("unexpected trusted udp payload: %s", got)
+	}
+
+	untrustedConn := bindUDPClient(t, "127.0.0.3")
+	defer untrustedConn.Close()
+	_, err = passXUDPRoundTripFromConn(untrustedConn, port, def, masterKey, target, "spoofed-passx", netip.MustParseAddrPort("127.0.0.8:41000"))
+	if err == nil {
+		t.Fatalf("expected untrusted transport to fail passx udp roundtrip")
+	}
+
+	snapshot, err := service.Snapshot(nil)
+	if err != nil {
+		t.Fatalf("Snapshot returned error: %v", err)
+	}
+	if len(snapshot.AliveIPs) != 1 {
+		t.Fatalf("expected exactly one active user alive record, got %d", len(snapshot.AliveIPs))
+	}
+	if len(snapshot.AliveIPs[0].IPs) != 1 || snapshot.AliveIPs[0].IPs[0] != trustedReal.Addr().String() {
+		t.Fatalf("expected only trusted real ip to be counted online, got %+v", snapshot.AliveIPs[0].IPs)
+	}
+}
+
 func testTCPRoundTrip(port int, def CipherDef, masterKey []byte, target string) error {
 	conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", itoa(port)), 3*time.Second)
 	if err != nil {
@@ -345,6 +474,40 @@ func udpReporterRoundTripFromConn(conn *net.UDPConn, port int, def CipherDef, ma
 	if err != nil {
 		return "", err
 	}
+	if _, err := conn.WriteToUDP(packet, serverAddr); err != nil {
+		return "", err
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	buf := make([]byte, 64*1024)
+	n, _, err := conn.ReadFromUDP(buf)
+	if err != nil {
+		return "", err
+	}
+	plaintext, err := decryptUDPPacketForUser(def, masterKey, buf[:n])
+	if err != nil {
+		return "", err
+	}
+	_, headerLen, err := SplitAddr(plaintext)
+	if err != nil {
+		return "", err
+	}
+	return string(plaintext[headerLen:]), nil
+}
+
+func passXUDPRoundTripFromConn(conn *net.UDPConn, port int, def CipherDef, masterKey []byte, target string, payload string, realAddr netip.AddrPort) (string, error) {
+	serverAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:"+itoa(port))
+	if err != nil {
+		return "", err
+	}
+	targetAddr, err := EncodeAddr(target)
+	if err != nil {
+		return "", err
+	}
+	ssPacket, err := encryptUDPPacket(def, masterKey, append(targetAddr, []byte(payload)...))
+	if err != nil {
+		return "", err
+	}
+	packet := append(buildPassXHeader(realAddr), ssPacket...)
 	if _, err := conn.WriteToUDP(packet, serverAddr); err != nil {
 		return "", err
 	}

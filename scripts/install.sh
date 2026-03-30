@@ -209,6 +209,10 @@ ${ALLOW_TARGETS_YAML}
   block_targets:
 ${BLOCK_TARGETS_YAML}
 
+passx:
+  enabled: false
+  trusted_cidrs: []
+
 log:
   level: info
 EOF
